@@ -1,0 +1,36 @@
+# Konfigurasi BotBawel (non-rahasia). Rahasia (token, password) ada di .env
+
+bot_name: BotBawel
+timezone: Asia/Jakarta
+language: id
+
+watchlist:
+  - { symbol: BTC/USDT, market: crypto }
+  - { symbol: ETH/USDT, market: crypto }
+  - { symbol: XAU/USD,  market: gold }
+
+timeframes: [15m, 30m, 1h]
+default_timeframe: 30m
+
+indicators:
+  ma_fast: 5
+  ma_slow: 20
+  ma_type: ema
+  rsi_length: 14
+  rsi_ma_length: 14
+  rsi_overbought: 70
+  rsi_oversold: 30
+
+briefing_times: ["07:00", "19:00"]
+
+calendar:
+  min_impact: medium
+  reminders_minutes: [30, 5]
+
+# ID channel Discord (klik kanan channel -> Copy Channel ID). Diisi saat fiturnya dibuat.
+channels:
+  briefing: null
+  news: null
+  calendar: null
+  alerts: null
+  signals: null
