@@ -1,12 +1,10 @@
 """
 bot/collectors/prices/gold.py
 -----------------------------
-Provider harga Emas (XAU/USD).
-Strategi:
-1. Jika `TWELVEDATA_API_KEY` diisi di `.env`, ambil XAU/USD langsung dari Twelve Data API.
-2. Jika belum diisi (atau limit habis), otomatis fallback ke `PAXG/USDT` di Binance
-   (PAX Gold = aset emas fisik 1 troy ounce yang harganya bergerak 1:1 mengikuti XAU/USD).
-Dengan begitu, fitur Gold tetap bisa dites kapan saja tanpa wajib punya API key dulu!
+Provider harga Emas (XAU/USD) dengan **Multi-Domain Fallback**:
+1. Jika `TWELVEDATA_API_KEY` diisi di `.env`, ambil `XAU/USD` dari Twelve Data API.
+2. Fallback ke `PAXG/USDT` (PAX Gold 1:1 troy oz) lewat rantai mirror di `CryptoCCXTProvider`
+   (Binance Vision -> Binance GCP -> CryptoCompare -> Yahoo Finance `GC=F`).
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ _TF_MAP = {
 
 
 class GoldPriceProvider(PriceProvider):
-    """Provider XAU/USD dengan Twelve Data + fallback otomatis ke PAXG/USDT."""
+    """Provider XAU/USD dengan Twelve Data + multi-domain fallback."""
 
     def __init__(self, api_key: str | None, fallback_crypto: CryptoCCXTProvider) -> None:
         self._api_key = api_key
@@ -55,9 +53,8 @@ class GoldPriceProvider(PriceProvider):
                             source="TwelveData (XAU/USD)",
                         )
             except Exception as e:
-                logger.warning(f"TwelveData XAU/USD gagal ({e}), fallback ke PAXG/USDT")
+                logger.warning(f"TwelveData XAU/USD gagal ({e}), fallback ke multi-domain")
 
-        # Fallback: PAXG/USDT di Binance (1 PAXG = 1 troy oz emas)
         t = await self._fallback.fetch_ticker("PAXG/USDT")
         return TickerData(
             symbol="XAU/USD",
@@ -68,7 +65,7 @@ class GoldPriceProvider(PriceProvider):
             low_24h=t.low_24h,
             volume_24h=t.volume_24h,
             timestamp=t.timestamp,
-            source="Binance Proxy (PAXG/USDT)",
+            source=f"Gold Proxy ({t.source})",
         )
 
     async def fetch_candles(
@@ -107,6 +104,6 @@ class GoldPriceProvider(PriceProvider):
                             )
                         return candles
             except Exception as e:
-                logger.warning(f"TwelveData candles gagal ({e}), fallback ke PAXG/USDT")
+                logger.warning(f"TwelveData candles gagal ({e}), fallback ke multi-domain")
 
         return await self._fallback.fetch_candles("PAXG/USDT", timeframe=timeframe, limit=limit)

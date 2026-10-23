@@ -2,9 +2,9 @@
 bot/collectors/prices/base.py
 -----------------------------
 Kontrak dasar (interface) untuk semua penyedia data harga (`PriceProvider`)
-serta fungsi normalisasi simbol supaya input user fleksibel:
-- "btc", "btcusdt", "btc/usdt" -> ("BTC/USDT", "crypto")
-- "xau", "xauusd", "gold"      -> ("XAU/USD", "gold")
+serta fungsi normalisasi simbol supaya input user super fleksibel:
+- "btc", "btcusd", "btc/usd", "btcusdt", "btc/usdt" -> ("BTC/USDT", "crypto")
+- "xau", "xauusd", "xau/usd", "gold", "emas"        -> ("XAU/USD", "gold")
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class TickerData:
     """Data harga saat ini (snapshot 24 jam)."""
     symbol: str
     market: str
-    price: float
+    price: str | float
     change_24h_pct: float
     high_24h: float
     low_24h: float
@@ -57,21 +57,32 @@ def normalize_symbol(raw: str) -> tuple[str, str]:
     """
     Ubah input simbol bebas dari user menjadi (symbol_standar, market).
     Contoh:
-    - "btc"      -> ("BTC/USDT", "crypto")
-    - "ethusdt"  -> ("ETH/USDT", "crypto")
-    - "xauusd"   -> ("XAU/USD", "gold")
-    - "gold"     -> ("XAU/USD", "gold")
+    - "btc", "btcusd", "btc/usd", "btcusdt" -> ("BTC/USDT", "crypto")
+    - "eth", "ethusd", "ethusdt"            -> ("ETH/USDT", "crypto")
+    - "xau", "xauusd", "gold", "emas"       -> ("XAU/USD", "gold")
     """
-    cleaned = raw.upper().strip().replace("-", "/")
+    cleaned = raw.upper().strip().replace("-", "/").replace(" ", "")
 
-    if cleaned in {"XAU", "XAUUSD", "XAU/USD", "GOLD"}:
+    # 1. Deteksi Emas / Gold terlebih dahulu
+    if cleaned in {"XAU", "XAUUSD", "XAU/USD", "XAUUSDT", "XAU/USDT", "GOLD", "EMAS"}:
         return "XAU/USD", "gold"
 
+    # 2. Jika user pakai garis miring (mis. BTC/USD atau BTC/USDT)
     if "/" in cleaned:
-        return cleaned, "crypto"
+        base, quote = cleaned.split("/", 1)
+        if quote in {"USD", "USDT", "BUSD", "USDC"}:
+            return f"{base}/USDT", "crypto"
+        return f"{base}/{quote}", "crypto"
 
+    # 3. Jika diakhiri USDT (mis. BTCUSDT -> BTC/USDT)
     if cleaned.endswith("USDT") and len(cleaned) > 4:
         base = cleaned[:-4]
         return f"{base}/USDT", "crypto"
 
+    # 4. Jika diakhiri USD (mis. BTCUSD -> BTC/USDT, ETHUSD -> ETH/USDT)
+    if cleaned.endswith("USD") and len(cleaned) > 3:
+        base = cleaned[:-3]
+        return f"{base}/USDT", "crypto"
+
+    # 5. Default: anggap kode koin saja (mis. BTC -> BTC/USDT, SOL -> SOL/USDT)
     return f"{cleaned}/USDT", "crypto"
