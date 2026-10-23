@@ -1,48 +1,48 @@
-import os
-import discord
-from discord import app_commands
-from dotenv import load_dotenv
+"""
+bot/main.py
+-----------
+Entry point utama untuk menyalakan BotBawel:
+1. Muat konfigurasi dari `.env` dan `config.yaml`
+2. Inisialisasi koneksi PostgreSQL, buat seluruh tabel otomatis, dan isi watchlist awal
+3. Jalankan Discord Bot beserta seluruh Slash Commands dan APScheduler
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+
+# Pastikan root project ada di sys.path agar bisa dijalankan langsung (`python bot/main.py`)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from loguru import logger
+
+from bot.config import load_settings
+from bot.db.session import init_db
+from bot.discord_bot.client import BotBawel
 
 
-# 1. baca variable .env
-load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = os.getenv("DISCORD_GUILD_ID")
+async def async_main() -> None:
+    settings = load_settings()
+    logger.info(f"🚀 Menyalakan {settings.bot_name} (Zona waktu: {settings.timezone_name})...")
 
-
-# 2. setup bot client
-class BotBawel(discord.Client):
-    def __init__(self):
-        intents = discord.Intents.default()
-        super().__init__(intents=intents)
-        # command tree untuk slash command
-        self.tree = app_commands.CommandTree(self)
-
-    async def setup_hook(self):
-        if GUILD_ID:
-            guild = discord.Object(id=int(GUILD_ID))
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            print(f"Slash Command di sync ke server ID : {GUILD_ID}")
-
-    async def on_ready(self):
-        print(f"✅ {self.user} sudah online!")
-
-
-bot = BotBawel()
-
-
-# 3. slash command pertama = /ping
-@bot.tree.command(
-    name="ping", description="Cek apakah BotBawel nyala dan berapa latensinya"
-)
-async def ping(interaction: discord.Interaction):
-    latency_ms = round(bot.latency * 1000)
-    await interaction.response.send_message(
-        f"🏓 Pong! BotBawel aktif ({latency_ms} ms)"
+    # Inisialisasi PostgreSQL & buat tabel otomatis
+    pg_version = await init_db(
+        database_url=settings.database_url,
+        default_watchlist=settings.default_watchlist,
     )
+    logger.info(f"🗄️ Terhubung ke PostgreSQL: {pg_version.splitlines()[0]}")
+
+    bot = BotBawel(settings=settings)
+    async with bot:
+        await bot.start(settings.discord_token)
 
 
-# 4. jalankan bot
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        logger.info("👋 BotBawel dimatikan oleh user.")
