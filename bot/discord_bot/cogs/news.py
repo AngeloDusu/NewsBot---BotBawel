@@ -45,7 +45,7 @@ def build_news_embed(news_item: News) -> discord.Embed:
     )
     embed.add_field(name="Sentimen AI", value=f"**{badge}**", inline=True)
     embed.add_field(name="Aset Terdampak", value=f"`{news_item.assets or 'Market'}`", inline=True)
-    embed.set_footer(text=f"Sumber: {news_item.source} • Ringkasan oleh BotBawel AI")
+    embed.set_footer(text=f"Sumber: {news_item.source} • Ringkasan oleh BotBawel AI (Gemini)")
     return embed
 
 
@@ -59,7 +59,7 @@ class NewsCog(commands.Cog):
         name="news",
         description="Tampilkan berita crypto & ekonomi terbaru beserta ringkasan dan sentimen AI",
     )
-    @app_commands.describe(refresh="Ambil berita baru dari RSS terlebih dahulu?")
+    @app_commands.describe(refresh="Ambil berita baru dari RSS dan proses dengan AI?")
     async def news(
         self,
         interaction: discord.Interaction,
@@ -81,13 +81,27 @@ class NewsCog(commands.Cog):
                 .all()
             )
 
+            # Jika ada berita lama yang belum pernah diringkas oleh Gemini, proses sekarang
+            for r in rows:
+                if self.bot.ai_service.is_enabled and (
+                    not r.summary_id or r.summary_id == r.title or len(r.summary_id) < 50
+                ):
+                    summary, sentiment, assets = await self.bot.ai_service.summarize_news(
+                        title=r.title, snippet=r.title, source=r.source
+                    )
+                    r.summary_id = summary
+                    r.sentiment = sentiment
+                    r.assets = assets
+
+            await session.commit()
+
         if not rows:
             await interaction.followup.send("📭 Belum ada berita yang tersimpan saat ini.")
             return
 
         embeds = [build_news_embed(r) for r in rows]
         await interaction.followup.send(
-            content="📰 **3 Berita & Analisis Sentimen Terbaru:**", embeds=embeds
+            content="📰 **3 Berita & Analisis Sentimen AI Terbaru:**", embeds=embeds
         )
 
 
