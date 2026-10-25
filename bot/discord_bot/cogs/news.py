@@ -2,12 +2,12 @@
 bot/discord_bot/cogs/news.py
 ----------------------------
 Fitur F3 (News Feed) & F4 (AI Summary & Sentiment):
-- `/news [refresh]` -> Ambil & ringkas berita terbaru dengan AI dalam Bahasa Indonesia
-- Menyediakan fungsi `build_news_embed()` yang juga dipakai oleh scheduler otomatis.
+- `/news [refresh]` -> Ambil & ringkas berita terbaru dengan AI secara paralel & cepat
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Literal
 
 import discord
@@ -68,7 +68,7 @@ class NewsCog(commands.Cog):
         await interaction.response.defer()
 
         if refresh == "ya":
-            await collect_and_store_new_news(self.bot.ai_service, limit_new=3)
+            await collect_and_store_new_news(self.bot.ai_service, limit_new=2)
 
         async with get_session() as session:
             rows = list(
@@ -81,23 +81,38 @@ class NewsCog(commands.Cog):
                 .all()
             )
 
-            # Jika ada berita lama yang belum pernah diringkas oleh Gemini, proses sekarang
-            for r in rows:
-                if self.bot.ai_service.is_enabled and (
-                    not r.summary_id or r.summary_id == r.title or len(r.summary_id) < 50
-                ):
-                    summary, sentiment, assets = await self.bot.ai_service.summarize_news(
-                        title=r.title, snippet=r.title, source=r.source
-                    )
-                    r.summary_id = summary
-                    r.sentiment = sentiment
-                    r.assets = assets
-
-            await session.commit()
-
         if not rows:
             await interaction.followup.send("📭 Belum ada berita yang tersimpan saat ini.")
             return
+
+        # Proses AI secara paralel untuk berita yang belum memiliki ringkasan
+        tasks = []
+        news_to_update = []
+        for r in rows:
+            needs_ai = not r.summary_id or r.summary_id == r.title or len(r.summary_id) < 40
+            if self.bot.ai_service.is_enabled and needs_ai:
+                news_to_update.append(r)
+                tasks.append(
+                    self.bot.ai_service.summarize_news(
+                        title=r.title, snippet=r.title, source=r.source
+                    )
+                )
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            async with get_session() as session:
+                for r, res in zip(news_to_update, results):
+                    if isinstance(res, tuple) and len(res) == 3:
+                        summary, sentiment, assets = res
+                        db_row = await session.get(News, r.id)
+                        if db_row:
+                            db_row.summary_id = summary
+                            db_row.sentiment = sentiment
+                            db_row.assets = assets
+                            r.summary_id = summary
+                            r.sentiment = sentiment
+                            r.assets = assets
+                await session.commit()
 
         embeds = [build_news_embed(r) for r in rows]
         await interaction.followup.send(
