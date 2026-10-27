@@ -4,7 +4,7 @@ bot/collectors/prices/base.py
 Kontrak dasar (interface) untuk semua penyedia data harga (`PriceProvider`)
 serta fungsi normalisasi simbol supaya input user super fleksibel:
 - "btc", "btcusd", "btc/usd", "btcusdt", "btc/usdt" -> ("BTC/USDT", "crypto")
-- "xau", "xauusd", "xau/usd", "gold", "emas"        -> ("XAU/USD", "gold")
+- "xau", "xauusd", "xaa", "xaausd", "gold", "emas"   -> ("XAU/USD", "gold")
 """
 
 from __future__ import annotations
@@ -57,14 +57,18 @@ def normalize_symbol(raw: str) -> tuple[str, str]:
     """
     Ubah input simbol bebas dari user menjadi (symbol_standar, market).
     Contoh:
-    - "btc", "btcusd", "btc/usd", "btcusdt" -> ("BTC/USDT", "crypto")
-    - "eth", "ethusd", "ethusdt"            -> ("ETH/USDT", "crypto")
-    - "xau", "xauusd", "gold", "emas"       -> ("XAU/USD", "gold")
+    - "btc", "btcusd", "btc/usd", "btcusdt"        -> ("BTC/USDT", "crypto")
+    - "xau", "xauusd", "xaausd" (typo), "gold"     -> ("XAU/USD", "gold")
     """
     cleaned = raw.upper().strip().replace("-", "/").replace(" ", "")
 
-    # 1. Deteksi Emas / Gold terlebih dahulu
-    if cleaned in {"XAU", "XAUUSD", "XAU/USD", "XAUUSDT", "XAU/USDT", "GOLD", "EMAS"}:
+    # 1. Deteksi Emas / Gold (termasuk typo umum XAA / XAAUSD)
+    gold_aliases = {
+        "XAU", "XAUUSD", "XAU/USD", "XAUUSDT", "XAU/USDT",
+        "XAA", "XAAUSD", "XAA/USD", "XAAUSDT", "XAA/USDT",  # Antisipasi typo
+        "GOLD", "EMAS", "PAXG", "PAXGUSDT", "PAXG/USDT"
+    }
+    if cleaned in gold_aliases:
         return "XAU/USD", "gold"
 
     # 2. Jika user pakai garis miring (mis. BTC/USD atau BTC/USDT)

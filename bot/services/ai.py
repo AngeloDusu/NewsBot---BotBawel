@@ -2,8 +2,8 @@
 bot/services/ai.py
 ------------------
 Layanan AI menggunakan Google Gemini API (`google-genai`).
-Model: `models/gemini-3.8-flash` (cepat, hemat kuota, dan responsif).
-Dilengkapi timeout 10 detik agar tidak pernah menggantung (hang).
+Model Utama: `models/gemini-flash-lite-latest` (kuota Free Tier lebih besar, cepat, dan hemat token).
+Dilengkapi penanganan 429 RESOURCE_EXHAUSTED yang elegan (otomatis fallback ke rule-based tanpa crash).
 """
 
 from __future__ import annotations
@@ -20,14 +20,18 @@ try:
 except Exception:
     genai = None  # type: ignore
 
+# Model ringan dengan kuota harian besar di Free Tier
+DEFAULT_MODEL = "models/gemini-flash-lite-latest"
+
 
 class AIService:
     """Wrapper Gemini AI untuk analisis berita & briefing pasar berbahasa Indonesia."""
 
-    def __init__(self, api_key: str | None, model_name: str = "models/gemini-3.8-flash") -> None:
+    def __init__(self, api_key: str | None, model_name: str = DEFAULT_MODEL) -> None:
         self.api_key = api_key
         self.model_name = model_name
         self._client = genai.Client(api_key=api_key) if (api_key and genai) else None
+        self._rate_limited_until: float = 0.0
 
     @property
     def is_enabled(self) -> bool:
@@ -35,6 +39,11 @@ class AIService:
 
     async def _generate_text(self, prompt: str, timeout_sec: float = 12.0) -> str | None:
         if not self._client:
+            return None
+
+        # Jika sebelumnya terkena 429, hindari spamming API dan gunakan fallback
+        import time
+        if time.time() < self._rate_limited_until:
             return None
 
         def _call_api() -> str:
@@ -47,10 +56,18 @@ class AIService:
         try:
             return await asyncio.wait_for(asyncio.to_thread(_call_api), timeout=timeout_sec)
         except asyncio.TimeoutError:
-            logger.warning(f"Gemini API timeout setelah {timeout_sec} detik.")
+            logger.warning(f"Gemini API timeout ({timeout_sec}s). Menggunakan fallback.")
             return None
         except Exception as e:
-            logger.warning(f"Gemini API error: {e}")
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                logger.warning("Gemini API kuota harian tercapai (429). Beralih ke fallback analisis lokal.")
+                # Istirahatkan request AI selama 30 menit
+                self._rate_limited_until = time.time() + 1800
+            elif "503" in err_str:
+                logger.warning("Gemini API server sedang sibuk (503). Menggunakan fallback.")
+            else:
+                logger.warning(f"Gemini API error: {e}")
             return None
 
     async def summarize_news(
@@ -61,19 +78,16 @@ class AIService:
         Sentimen bernilai: "Bullish", "Bearish", atau "Netral".
         """
         prompt = (
-            "Kamu adalah analis pasar finansial senior untuk Crypto, Emas (XAU/USD), dan Makroekonomi.\n"
-            "Tugas: baca berita berikut, buat ringkasan padat 2 kalimat dalam Bahasa Indonesia dan tentukan sentimennya.\n"
-            "Sentimen harus tegas:\n"
-            "- Bullish: jika membawa dampak positif, inflow, kenaikan harga, pemangkasan suku bunga, atau adopsi.\n"
-            "- Bearish: jika membawa risiko, outflow, penurunan harga, ketegangan geopolitik/perang, atau kenaikan suku bunga.\n"
-            "- Netral: hanya jika berita tidak berdampak ke arah pasar.\n\n"
-            "Balas HANYA dalam JSON valid tanpa markdown tambahan dengan struktur:\n"
-            '{"summary": "Ringkasan 2 kalimat Bahasa Indonesia", '
-            '"sentiment": "Bullish atau Bearish atau Netral", '
-            '"assets": "Simbol aset relevan (contoh: BTC, ETH, XAU/USD, USD)"}\n\n'
-            f"Sumber: {source}\n"
+            "Kamu analis pasar profesional Crypto, Emas (XAU/USD), dan Makroekonomi.\n"
+            "Baca berita berikut, buat ringkasan 2 kalimat Bahasa Indonesia dan tentukan sentimennya.\n"
+            "Ketentuan sentimen:\n"
+            "- Bullish: jika positif, inflow, adopsi, kenaikan harga, pemangkasan suku bunga.\n"
+            "- Bearish: jika negatif, outflow, penurunan harga, risiko perang/konflik, suku bunga naik.\n"
+            "- Netral: jika murni informasi tanpa arah dampak pasar.\n\n"
+            "Balas HANYA JSON valid:\n"
+            '{"summary": "Ringkasan 2 kalimat", "sentiment": "Bullish|Bearish|Netral", "assets": "BTC, ETH, XAU/USD, dll"}\n\n'
             f"Judul: {title}\n"
-            f"Cuplikan: {snippet[:400]}\n"
+            f"Isi: {snippet[:350]}\n"
         )
         raw = await self._generate_text(prompt, timeout_sec=10.0)
         if raw:
@@ -90,10 +104,10 @@ class AIService:
                     sentiment = "Netral"
                 assets = str(payload.get("assets") or "Market").strip()
                 return summary, sentiment, assets
-            except Exception as e:
-                logger.warning(f"Gagal parse JSON Gemini: {e}")
+            except Exception:
+                pass
 
-        # Fallback cepat bila offline/timeout
+        # Fallback lokal jika kuota AI sedang penuh
         text_lower = f"{title} {snippet}".lower()
         bullish_kw = ("surge", "jump", "rally", "bull", "gain", "soar", "approve", "cut rate", "inflow", "buying", "high")
         bearish_kw = ("drop", "crash", "fall", "bear", "plunge", "hack", "lawsuit", "hike", "outflow", "pressure", "slide", "evacuation")
@@ -127,13 +141,13 @@ class AIService:
         events_block = "\n".join(events_summary) or "- Tidak ada jadwal ekonomi High/Medium terdekat."
 
         prompt = (
-            "Kamu adalah BotBawel, asisten trading pribadi yang cerdas, tajam, ringkas, dan to-the-point.\n"
-            f"Buat rangkuman pasar ({kind}) dalam Bahasa Indonesia yang profesional dan mudah dibaca menggunakan formatting Discord (bold, bullet point, emoji).\n\n"
+            "Kamu adalah BotBawel, asisten trading pribadi yang cerdas dan ringkas.\n"
+            f"Buat rangkuman pasar ({kind}) dalam Bahasa Indonesia menggunakan format Discord yang rapi:\n\n"
             "Struktur:\n"
-            "1. 📊 **Sorotan Pasar**: Analisis kondisi BTC, ETH, dan Emas (XAU/USD) berdasarkan data harga.\n"
-            "2. 📰 **Intisari Berita**: Sentimen & katalis penggerak pasar utama.\n"
-            "3. 📅 **Waspada Kalender Ekonomi**: Jadwal penting terdekat (WIB).\n"
-            "4. 💡 **Catatan Disiplin**: 1 kalimat penutup pengingat manajemen risiko.\n\n"
+            "1. 📊 **Sorotan Pasar**: Kondisi BTC, ETH, dan XAU/USD berdasarkan harga saat ini.\n"
+            "2. 📰 **Intisari Berita**: Sentimen utama penggerak pasar.\n"
+            "3. 📅 **Kalender Ekonomi**: Agenda penting terdekat (WIB).\n"
+            "4. 💡 **Catatan Risiko**: 1 kalimat pengingat disiplin trading.\n\n"
             f"=== DATA HARGA ===\n{tickers_block}\n\n"
             f"=== BERITA TERBARU ===\n{news_block}\n\n"
             f"=== AGENDA EKONOMI ===\n{events_block}\n"
